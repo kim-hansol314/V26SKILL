@@ -36,6 +36,7 @@
     <script src="./data/prob.js"></script>
     <script src="./data/positions.js"></script>
     <script src="./data/grades.js"></script>
+    <script src="./data/allstar.js"></script>
 
     <style>
         @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
@@ -65,9 +66,12 @@
         const FILE_SKILLS = window.SKILL_SCORES || { batter: [], pitcher: [] };
         const PROB_DATA   = window.PROB_DATA || {};
         const PROB_TAB_MAP= window.PROB_TAB_MAP || {};
+        const PROB_TAB_MAP_BY_CARD = window.PROB_TAB_MAP_BY_CARD || {};
+        const SLOT1_FIXED_CARDS    = window.FIRST_SLOT_FIXED_CARDS || ["임팩트"];
         const BULLPEN     = window.BULLPEN_PENALTY || { tabs: [], value: 0 };
         const GRADE_GUIDE = window.GRADE_GUIDE || [];
-        const IMPACT_GUIDE= window.IMPACT_GUIDE || {};
+        const CARD_GUIDE  = window.CARD_GUIDE || (window.IMPACT_GUIDE ? { "임팩트": window.IMPACT_GUIDE } : {});
+        const ALLSTAR_TABLES = window.ALLSTAR_TABLES || [];
         const STORAGE_KEY = "v26_skill_scores_override";
         const THEME_KEY   = "v26_theme";
 
@@ -311,6 +315,59 @@
           );
         };
 
+        // --------------------------------------------------------------- 올스타 확률표 (토글)
+        const AllstarTables = () => {
+          const [open, setOpen] = useState(null);
+          if (!ALLSTAR_TABLES.length) return null;
+          return (
+            <section className="mt-6 space-y-3">
+              <div className={`text-[10px] font-black uppercase tracking-widest text-center ${LABEL}`}>올스타 상세 확률표</div>
+              {ALLSTAR_TABLES.map(t => {
+                const isOpen = open === t.id;
+                return (
+                  <div key={t.id} className={`rounded-3xl border shadow-sm overflow-hidden ${CARD}`}>
+                    <button onClick={() => setOpen(isOpen ? null : t.id)}
+                      className="w-full px-5 py-4 flex items-center justify-between gap-3 text-left hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors">
+                      <span className="flex items-center gap-2.5 min-w-0">
+                        <Icon name="table" size={16} className="text-indigo-500 shrink-0" />
+                        <span className={`text-sm font-black ${TITLE}`}>{t.label}</span>
+                        <span className={`text-[10px] font-bold truncate ${LABEL}`}>{t.note}</span>
+                      </span>
+                      <Icon name="chevron-down" size={16} className={`shrink-0 text-slate-400 transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {isOpen && (
+                      <div className="px-3 pb-4 fade-in">
+                        <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-700">
+                          <table className="w-full text-right border-collapse">
+                            <thead>
+                              <tr className="bg-slate-100 dark:bg-slate-900">
+                                <th className={`px-4 py-2.5 text-[11px] font-black uppercase tracking-wider text-left whitespace-nowrap ${LABEL}`}>기준 점수</th>
+                                {t.columns.map(c => (
+                                  <th key={c} className={`px-4 py-2.5 text-[11px] font-black uppercase tracking-wider whitespace-nowrap ${LABEL}`}>{c}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {t.rows.map((row, i) => (
+                                <tr key={row[0]} className={`border-t border-slate-100 dark:border-slate-700/60 ${i % 2 ? 'bg-slate-50/60 dark:bg-slate-900/40' : ''}`}>
+                                  <td className="px-4 py-2 text-left font-mono font-black text-sm text-indigo-600 dark:text-indigo-400 whitespace-nowrap">{row[0]}</td>
+                                  {row.slice(1).map((v, k) => (
+                                    <td key={k} className="px-4 py-2 font-mono text-sm text-slate-700 dark:text-slate-200 whitespace-nowrap">{v}%</td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </section>
+          );
+        };
+
         // --------------------------------------------------------------- App
         const App = () => {
           const [tab, setTab] = useState(TABS[0].id);
@@ -353,9 +410,12 @@
 
           const skillData  = skillDataAll[tab] || [];
           const currentSrc = sourceOf(tab);
-          const probKey    = PROB_TAB_MAP[tab] || tab;
-          const cardOptions = useMemo(() => Object.keys(PROB_DATA[probKey] || {}), [probKey]);
+          const probKey    = (PROB_TAB_MAP_BY_CARD[cardType] || PROB_TAB_MAP)[tab] || tab;
+          const cardOptions = useMemo(() => Object.keys(PROB_DATA[PROB_TAB_MAP[tab] || tab] || {}), [tab]);
           const isImpact = cardType.includes('임팩트');
+          // 1옵션이 고정되는 카드(임팩트·올스타): 2·3번 슬롯만 합산 + 점수(minScore) 기준 등급 판정
+          const slot1Fixed = SLOT1_FIXED_CARDS.includes(cardType);
+          const cardGuide = (CARD_GUIDE[cardType] || {})[tab] || '';
 
           useEffect(() => { if (!cardOptions.includes(cardType)) setCardType(cardOptions[0] || ''); }, [tab, cardOptions]);
 
@@ -388,17 +448,17 @@
             return { score: scoreSum.toFixed(2), level: levelSum };
           }, [slots, findSkill]);
 
-          // 확률 계산용 점수 (임팩트는 2·3번 슬롯만 / 중계·마무리는 불펜 보정)
+          // 확률 계산용 점수 (1옵션 고정 카드는 2·3번 슬롯만 / 그 외 중계·마무리는 불펜 보정)
           const calculationScore = useMemo(() => {
             let sum = 0;
             slots.forEach((slot, idx) => {
-              if (isImpact && idx === 0) return;
+              if (slot1Fixed && idx === 0) return;
               const skill = findSkill(slot.skillName);
               if (skill) sum += scoreOf(skill, slot.level);
             });
-            if (!isImpact && (BULLPEN.tabs || []).includes(tab)) sum = Math.max(0, sum - (BULLPEN.value || 0));
+            if (!slot1Fixed && (BULLPEN.tabs || []).includes(tab)) sum = Math.max(0, sum - (BULLPEN.value || 0));
             return sum;
-          }, [slots, findSkill, isImpact, tab]);
+          }, [slots, findSkill, slot1Fixed, tab]);
 
           const luckInfo = useMemo(() => {
             const score = calculationScore;
@@ -423,11 +483,11 @@
             if (luckInfo.prob === null) return { grade: "-", label: "분석 대기", note: "스킬을 선택하면 분석이 시작됩니다.", color: LABEL, bg: "bg-slate-50 dark:bg-slate-800/60", border: "border-slate-200 dark:border-slate-700", icon: <Icon name="refresh-ccw" size={20} /> };
             let matched = GRADE_GUIDE[GRADE_GUIDE.length - 1];
             for (const g of GRADE_GUIDE) {
-              const ok = isImpact ? calculationScore >= (g.minScore?.[tab] ?? 0) : luckInfo.prob <= g.maxProb;
+              const ok = slot1Fixed ? calculationScore >= (g.minScore?.[tab] ?? 0) : luckInfo.prob <= g.maxProb;
               if (ok) { matched = g; break; }
             }
             return { grade: matched.grade, label: matched.name, note: matched.note, ...(GRADE_STYLE[matched.grade] || GRADE_STYLE["C"]) };
-          }, [luckInfo.prob, isImpact, calculationScore, tab]);
+          }, [luckInfo.prob, slot1Fixed, calculationScore, tab]);
 
           const ticketInfo = useMemo(() => {
             if (luckInfo.prob === null) return { count: 0, fullName: "변경권" };
@@ -548,7 +608,7 @@
                     </div>
                     <div className={`p-6 rounded-[2rem] flex flex-col items-center justify-center border shadow-sm ${CARD}`}>
                       <Icon name="percent" className="text-purple-500 mb-2" />
-                      <span className={`text-[10px] font-black uppercase tracking-widest mb-1 ${LABEL}`}>상위 확률 {isImpact && "(2,3번)"}</span>
+                      <span className={`text-[10px] font-black uppercase tracking-widest mb-1 ${LABEL}`}>상위 확률 {slot1Fixed && "(2,3번)"}</span>
                       <span className={`font-black tracking-tighter ${luckInfo.prob !== null ? 'text-3xl text-purple-600 dark:text-purple-400 italic' : `text-xs mt-2 text-center ${LABEL}`}`}>
                         {luckInfo.prob !== null ? `${luckInfo.prob.toFixed(4)}%${luckInfo.suffix}` : luckInfo.msg}
                       </span>
@@ -556,16 +616,16 @@
                   </section>
 
                   <section className={`p-8 rounded-[2.5rem] border-2 flex flex-col items-center justify-center transition-all duration-500 ${gradeInfo.bg} ${gradeInfo.border} border-dashed relative overflow-hidden`}>
-                    <div className={`flex items-center gap-2 mb-3 font-black uppercase text-[10px] tracking-[0.3em] ${gradeInfo.color}`}>{gradeInfo.icon}스킬셋 최종 평가 {isImpact && "(2,3번 기준)"}</div>
+                    <div className={`flex items-center gap-2 mb-3 font-black uppercase text-[10px] tracking-[0.3em] ${gradeInfo.color}`}>{gradeInfo.icon}스킬셋 최종 평가 {slot1Fixed && "(2,3번 기준)"}</div>
                     <div className={`text-4xl font-black italic tracking-tighter mb-1 ${gradeInfo.color}`}>{gradeInfo.grade !== "-" && `${gradeInfo.grade} · `}{gradeInfo.label}</div>
 
-                    {isImpact && IMPACT_GUIDE[tab] && (
+                    {cardGuide && (
                       <div className="mt-2 mb-4 p-3 bg-white/60 dark:bg-slate-800/70 rounded-2xl border border-blue-200 dark:border-slate-700 flex flex-col items-center shadow-sm fade-in">
                         <div className="flex items-center gap-1.5 mb-1">
                           <Icon name="star" size={14} className="text-blue-500" fill="#3b82f6" />
-                          <span className="text-[11px] font-black text-blue-600 dark:text-blue-400 uppercase tracking-wider">임팩트 1옵션 권장 기준</span>
+                          <span className="text-[11px] font-black text-blue-600 dark:text-blue-400 uppercase tracking-wider">{cardType} 1옵션 권장 기준</span>
                         </div>
-                        <p className="text-[13px] font-black text-slate-700 dark:text-slate-200">{IMPACT_GUIDE[tab]}</p>
+                        <p className="text-[13px] font-black text-slate-700 dark:text-slate-200">{cardGuide}</p>
                       </div>
                     )}
 
@@ -580,6 +640,7 @@
                       </div>
                     )}
                   </section>
+                  <AllstarTables />
                 </main>
 
                 <footer className="mt-12 mb-8 text-center space-y-2">
