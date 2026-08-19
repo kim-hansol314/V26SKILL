@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>V26 통합 스킬 및 확률 분석기</title>
+
+    <!-- 다크모드: 화면 깜빡임 방지를 위해 렌더 전에 클래스를 먼저 적용 -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('v26_theme');
+          var dark = saved ? saved === 'dark'
+                           : window.matchMedia('(prefers-color-scheme: dark)').matches;
+          if (dark) document.documentElement.classList.add('dark');
+        } catch (e) {}
+      })();
+    </script>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>tailwind.config = { darkMode: 'class' };</script>
+
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+    <!-- Babel for in-browser JSX compilation -->
+    <script src="https://unpkg.com/@babel/standalone@7.28.5/babel.min.js"></script>
+
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <!-- ▼▼ 데이터 파일 (이 파일들만 수정하면 됩니다) ▼▼ -->
+    <script src="./data/skills.js"></script>
+    <script src="./data/prob.js"></script>
+    <script src="./data/positions.js"></script>
+    <script src="./data/grades.js"></script>
+
+    <style>
+        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+        body { font-family: 'Pretendard', sans-serif; background-color: #f8fafc; }
+        html.dark body { background-color: #020617; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .fade-in { animation: fadeIn 0.2s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect, useRef, useCallback } = React;
+
+        // --- Lucide Icon Wrapper ---
+        const Icon = ({ name, size = 20, className = "", fill = "none" }) => {
+            useEffect(() => { if (window.lucide) window.lucide.createIcons(); });
+            return <i data-lucide={name} className={className} style={{ width: size, height: size, strokeWidth: 2, fill: fill }}></i>;
+        };
+
+        // --- 외부 데이터 파일 ---
+        const LEVELS      = window.SKILL_LEVELS || [5, 6, 7, 8, 9, 10];
+        const TABS        = window.SKILL_TABS || [{ id: "batter", label: "타자", source: "batter" }];
+        const FILE_SKILLS = window.SKILL_SCORES || { batter: [], pitcher: [] };
+        const PROB_DATA   = window.PROB_DATA || {};
+        const PROB_TAB_MAP= window.PROB_TAB_MAP || {};
+        const BULLPEN     = window.BULLPEN_PENALTY || { tabs: [], value: 0 };
+        const GRADE_GUIDE = window.GRADE_GUIDE || [];
+        const IMPACT_GUIDE= window.IMPACT_GUIDE || {};
+        const STORAGE_KEY = "v26_skill_scores_override";
+        const THEME_KEY   = "v26_theme";
+
+        // 포지션 필터 (data/positions.js)
+        const FILTER_ON   = window.POSITION_FILTER_ENABLED !== false;
+        const POSITIONS   = window.PITCHER_POSITIONS || ["starter", "relief", "closer"];
+        const POS_TAGS    = window.POSITION_TAGS || [];
+        const POS_AVAIL   = window.POSITION_AVAILABILITY || {};
+        const POS_OVERRIDE= window.POSITION_OVERRIDE || {};
+
+        // 스킬 등급 (data/grades.js)
+        const SKILL_GRADES  = window.SKILL_GRADES || {};
+        const GRADE_COLORS  = window.GRADE_COLORS || {};
+        const DEFAULT_GRADE = window.DEFAULT_SKILL_GRADE || "특수";
+
+        // 점수표 편집 대상 소스 (선발/중계/마무리는 pitcher 한 벌을 공유)
+        const SOURCES = TABS.reduce((acc, t) => {
+          const src = t.source || t.id;
+          if (!acc.some(s => s.id === src)) acc.push({ id: src, label: src === 'batter' ? '타자' : src === 'pitcher' ? '투수' : t.label });
+          return acc;
+        }, []);
+        const sourceOf = (tabId) => (TABS.find(t => t.id === tabId) || {}).source || tabId;
+
+        // --- 공통 스타일 ---
+        const CARD      = "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700";
+        const FIELD     = "bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700";
+        const LABEL     = "text-slate-400 dark:text-slate-500";
+        const TITLE     = "text-slate-900 dark:text-slate-100";
+
+        const GRADE_STYLE = {
+          "SR+": { color: "text-amber-500",  bg: "bg-amber-50 dark:bg-amber-500/10",   border: "border-amber-200 dark:border-amber-500/30",  icon: <Icon name="zap" fill="#f59e0b" className="text-amber-500" size={24}/> },
+          "S":   { color: "text-rose-600 dark:text-rose-400",   bg: "bg-rose-50 dark:bg-rose-500/10",     border: "border-rose-200 dark:border-rose-500/30",    icon: <Icon name="award" fill="#f43f5e" className="text-rose-500" size={24}/> },
+          "A":   { color: "text-purple-600 dark:text-purple-400", bg: "bg-purple-50 dark:bg-purple-500/10", border: "border-purple-200 dark:border-purple-500/30", icon: <Icon name="award" className="text-purple-500" size={24}/> },
+          "B":   { color: "text-blue-600 dark:text-blue-400",   bg: "bg-blue-50 dark:bg-blue-500/10",     border: "border-blue-200 dark:border-blue-500/30",    icon: <Icon name="arrow-right-circle" className="text-blue-500" size={24}/> },
+          "C":   { color: "text-indigo-500 dark:text-indigo-400", bg: "bg-slate-50 dark:bg-slate-800/60",   border: "border-slate-200 dark:border-slate-700",     icon: <Icon name="refresh-ccw" size={24}/> }
+        };
+        const GRADE_TEXT_COLOR = {
+          "SR+": "text-amber-500", "S": "text-rose-600 dark:text-rose-400", "A": "text-purple-600 dark:text-purple-400",
+          "B": "text-blue-600 dark:text-blue-400", "C": "text-indigo-500 dark:text-indigo-400"
+        };
+
+        const estimateTicketCount = (prob) => { const p = Number(prob); return p > 0 ? Math.ceil(100 / p) : 0; };
+        const normalize = (s) => (s || "").replace(/\s+/g, '');
+        const hasLevel = (skill, lv) => !!skill && skill.scores[lv] !== null && skill.scores[lv] !== undefined && Number.isFinite(Number(skill.scores[lv]));
+        const scoreOf  = (skill, lv) => hasLevel(skill, lv) ? Number(skill.scores[lv]) : 0;
+
+        // --- 포지션(선발/중계/마무리) 판정 ------------------------------------
+        // "긴급투입(추격조)☆" → "긴급투입"  (공식 확률표 / 등급표 조회용 기준 스킬명)
+        const baseSkillName = (name) => (name || '').split('(')[0].replace(/[☆★\s]/g, '');
+
+        const positionsForSkill = (name) => {
+          if (POS_OVERRIDE[name]) return POS_OVERRIDE[name];                 // 1) 개별 강제 지정
+          const tagged = new Set();                                          // 2) 이름에 박힌 배치 태그
+          POS_TAGS.forEach(([keyword, positions]) => {
+            if (name.includes(keyword)) positions.forEach(p => tagged.add(p));
+          });
+          const byTag = tagged.size ? [...tagged] : POSITIONS;
+          const allowed = POS_AVAIL[baseSkillName(name)];                    // 3) 공식 확률표로 교집합
+          return allowed ? byTag.filter(p => allowed.includes(p)) : byTag;
+        };
+
+        const allowedInTab = (name, tabId) =>
+          !POSITIONS.includes(tabId) || !FILTER_ON || positionsForSkill(name).includes(tabId);
+
+        // --- 스킬 등급 --------------------------------------------------------
+        const gradeOf = (name, source) => (SKILL_GRADES[source] || {})[baseSkillName(name)] || DEFAULT_GRADE;
+        const gradeClass = (name, source) => (GRADE_COLORS[gradeOf(name, source)] || {}).text || "";
+
+        // 표(TSV/CSV) 텍스트 → 스킬 배열
+        const parseTable = (text) => {
+          const rows = [];
+          text.split(/\r?\n/).forEach(line => {
+            if (!line.trim()) return;
+            const cols = line.includes('\t') ? line.split('\t') : line.split(',');
+            const name = (cols[0] || '').trim();
+            if (!name || /^스킬\s*명?$/.test(name.replace(/\s+/g, ''))) return;   // 헤더행 무시
+            const scores = {};
+            let valid = false;
+            LEVELS.forEach((lv, i) => {
+              const raw = (cols[i + 1] || '').trim().replace(/,/g, '');
+              if (raw === '' || isNaN(Number(raw))) { scores[lv] = null; }
+              else { scores[lv] = Number(raw); valid = true; }
+            });
+            if (valid) rows.push({ name, scores });
+          });
+          return rows;
+        };
+
+        // 스킬 데이터 → data/skills.js 파일 내용
+        const buildSkillsFile = (data) => {
+          const body = (key) => (data[key] || []).map(s => {
+            const sc = LEVELS.map(lv => `${lv}: ${s.scores[lv] === null || s.scores[lv] === undefined ? 'null' : Number(s.scores[lv]).toFixed(2)}`).join(', ');
+            return `    { name: ${JSON.stringify(s.name)}, scores: { ${sc} } },`;
+          }).join('\n');
+          return `/* =========================================================================\n`
+            + ` * V26 스킬 점수표  (편집 가능 데이터 파일)\n`
+            + ` * -------------------------------------------------------------------------\n`
+            + ` * ▸ 이 파일만 수정하면 사이트 점수가 바뀝니다. (index.html 은 건드릴 필요 없음)\n`
+            + ` * ▸ 해당 레벨이 없는 스킬은 값을 null 로 두세요.\n`
+            + ` * ========================================================================= */\n\n`
+            + `window.SKILL_LEVELS = ${JSON.stringify(LEVELS)};\n\n`
+            + `window.SKILL_TABS = ${JSON.stringify(TABS, null, 2).replace(/"([a-z]+)":/g, '$1:')};\n\n`
+            + `window.SKILL_SCORES = {\n`
+            + SOURCES.map(s => `  ${s.id}: [\n${body(s.id)}\n  ],`).join('\n\n')
+            + `\n};\n`;
+        };
+
+        // --------------------------------------------------------------- 스킬 슬롯
+        const SkillSlot = ({ slot, index, data, source, onChange, onLevelChange, isOpen, onToggle }) => {
+          const [searchTerm, setSearchTerm] = useState('');
+          const slotRef = useRef(null);
+          useEffect(() => {
+            function handleClickOutside(e) { if (isOpen && slotRef.current && !slotRef.current.contains(e.target)) onToggle(); }
+            document.addEventListener("mousedown", handleClickOutside);
+            return () => document.removeEventListener("mousedown", handleClickOutside);
+          }, [isOpen, onToggle]);
+
+          const filteredData = useMemo(() => {
+            const q = normalize(searchTerm).toLowerCase();
+            return data.filter(s => normalize(s.name).toLowerCase().includes(q));
+          }, [data, searchTerm]);
+
+          const selectedSkill = data.find(s => s.name === slot.skillName);
+
+          return (
+            <div ref={slotRef} className={`relative p-4 rounded-2xl border transition-all duration-200 ${isOpen ? 'z-50 ring-2 ring-indigo-500 shadow-xl' : 'z-10 shadow-sm'} ${CARD} mb-3`}>
+              <div className="flex flex-col sm:flex-row gap-4 items-center">
+                <div className="flex-1 w-full relative">
+                  <label className={`text-[10px] font-bold uppercase mb-1 block tracking-wider flex justify-between ${LABEL}`}>
+                    <span>Skill Slot {index + 1}</span>
+                  </label>
+                  <div onClick={onToggle} className={`w-full border rounded-xl px-4 py-2.5 cursor-pointer flex justify-between items-center transition-colors hover:border-indigo-300 ${FIELD}`}>
+                    <span className={slot.skillName ? `font-bold text-sm ${gradeClass(slot.skillName, source)}` : "text-slate-400 dark:text-slate-500 text-sm"}>
+                      {slot.skillName || `스킬 검색 (총 ${data.length}개)`}
+                    </span>
+                    <Icon name="chevron-down" size={16} className={`text-slate-400 transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`} />
+                  </div>
+                  {isOpen && (
+                    <div className={`absolute z-[100] mt-2 w-full border rounded-xl shadow-2xl overflow-hidden fade-in ${CARD}`}>
+                      <div className={`p-3 border-b border-slate-100 dark:border-slate-700 flex items-center gap-2 ${FIELD}`}>
+                        <Icon name="search" size={16} className="text-indigo-500" />
+                        <input autoFocus type="text" placeholder="스킬명 검색..." className={`w-full bg-transparent outline-none text-sm font-medium ${TITLE}`} value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                        {slot.skillName && (
+                          <button onClick={() => { onChange(index, ''); onToggle(); setSearchTerm(''); }} className="text-[10px] font-black text-slate-400 hover:text-rose-500 whitespace-nowrap">비우기</button>
+                        )}
+                      </div>
+                      <div className="max-h-72 overflow-y-auto no-scrollbar">
+                        {filteredData.length > 0 ? filteredData.map((s, i) => (
+                          <div key={i} onClick={() => { onChange(index, s.name); onToggle(); setSearchTerm(''); }}
+                            className="px-4 py-2.5 hover:bg-indigo-50 dark:hover:bg-slate-700 cursor-pointer border-b border-slate-50 dark:border-slate-700/50 last:border-0 transition-colors flex justify-between items-center gap-3">
+                            <span className={`text-sm font-semibold ${gradeClass(s.name, source)}`}>{s.name}</span>
+                            <span className="text-[10px] font-mono text-slate-400 dark:text-slate-500 whitespace-nowrap">{LEVELS.map(lv => hasLevel(s, lv) ? Number(s.scores[lv]).toFixed(1) : '-').join(' / ')}</span>
+                          </div>
+                        )) : <div className="px-4 py-8 text-center text-slate-400 text-xs italic">검색 결과가 없습니다.</div>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="w-full sm:w-auto text-center sm:text-left">
+                  <label className={`text-[10px] font-bold uppercase mb-1 block tracking-wider ${LABEL}`}>Level</label>
+                  <div className="flex gap-1 justify-center flex-wrap">
+                    {LEVELS.map(lv => {
+                      const disabled = !!selectedSkill && !hasLevel(selectedSkill, lv);
+                      return (
+                        <button key={lv} disabled={disabled} onClick={() => onLevelChange(index, lv)}
+                          className={`w-9 h-9 rounded-lg font-bold text-sm transition-all ${slot.level === lv ? 'bg-indigo-600 text-white shadow-md scale-110'
+                            : disabled ? 'bg-slate-100 dark:bg-slate-900 border border-slate-100 dark:border-slate-800 text-slate-300 dark:text-slate-600 cursor-not-allowed'
+                            : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 text-slate-400 dark:text-slate-400 hover:border-indigo-200'}`}>{lv}</button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="w-full sm:w-16 flex flex-col items-center sm:items-end">
+                  <label className={`text-[10px] font-bold uppercase mb-1 block tracking-wider ${LABEL}`}>Score</label>
+                  <div className="font-mono font-bold text-lg text-indigo-600 dark:text-indigo-400">{scoreOf(selectedSkill, slot.level).toFixed(2)}</div>
+                </div>
+              </div>
+            </div>
+          );
+        };
+
+        // --------------------------------------------------------------- 점수표 편집 모달
+        const ScoreEditor = ({ source, data, onApply, onReset, isOverridden, onClose, showToast }) => {
+          const toText = (arr) => arr.map(s => [s.name, ...LEVELS.map(lv => hasLevel(s, lv) ? Number(s.scores[lv]).toFixed(2) : '')].join('\t')).join('\n');
+          const [target, setTarget] = useState(source);
+          const [text, setText] = useState(() => toText(data[source] || []));
+
+          useEffect(() => { setText(toText(data[target] || [])); }, [target]);
+
+          const apply = () => {
+            const rows = parseTable(text);
+            if (!rows.length) { showToast("읽을 수 있는 데이터가 없습니다."); return; }
+            onApply(target, rows);
+            showToast(`${rows.length}개 스킬을 적용했습니다.`);
+          };
+
+          const download = () => {
+            const next = { ...data, [target]: parseTable(text) };
+            const blob = new Blob([buildSkillsFile(next)], { type: 'text/javascript;charset=utf-8' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'skills.js';
+            a.click();
+            URL.revokeObjectURL(a.href);
+          };
+
+          return (
+            <div className="fixed inset-0 z-[500] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
+              <div className="bg-white dark:bg-slate-800 w-full max-w-3xl rounded-[2rem] shadow-2xl overflow-hidden fade-in" onClick={e => e.stopPropagation()}>
+                <div className="px-6 py-5 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+                  <div>
+                    <h3 className={`font-black text-lg flex items-center gap-2 ${TITLE}`}><Icon name="table" size={18} className="text-indigo-500" /> 스킬 점수표 편집</h3>
+                    <p className={`text-[11px] font-bold mt-1 ${LABEL}`}>엑셀에서 복사한 표를 그대로 붙여넣으세요 · 열 순서: 스킬명 / {LEVELS.join(' / ')}</p>
+                  </div>
+                  <button onClick={onClose} className="text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"><Icon name="x" size={20} /></button>
+                </div>
+
+                <div className="px-6 py-4 flex items-center gap-2 border-b border-slate-50 dark:border-slate-700/50">
+                  {SOURCES.map(s => (
+                    <button key={s.id} onClick={() => setTarget(s.id)} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${target === s.id ? 'bg-slate-900 dark:bg-indigo-600 text-white' : 'bg-slate-100 dark:bg-slate-700 text-slate-400 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white'}`}>{s.label}</button>
+                  ))}
+                  <span className={`ml-auto text-[10px] font-bold ${LABEL}`}>{isOverridden ? '현재: 브라우저에 저장된 수정본 사용 중' : '현재: data/skills.js 원본 사용 중'}</span>
+                </div>
+
+                <div className="px-6 pb-4 pt-4">
+                  <textarea value={text} onChange={e => setText(e.target.value)} spellCheck="false"
+                    className={`w-full h-72 font-mono text-[11px] leading-relaxed p-4 border rounded-2xl outline-none focus:ring-2 focus:ring-indigo-400 resize-none ${FIELD} ${TITLE}`} />
+                  <p className={`text-[10px] font-bold mt-2 leading-relaxed ${LABEL}`}>
+                    · 값이 비어 있으면 해당 레벨은 존재하지 않는 것으로 처리됩니다 (레벨 버튼 비활성화).<br/>
+                    · <b>적용</b>은 이 브라우저에만 저장됩니다. 사이트 자체에 영구 반영하려면 <b>skills.js 내려받기</b> 후 <code className="bg-slate-100 dark:bg-slate-700 px-1 rounded">data/skills.js</code> 를 교체하세요.
+                  </p>
+                </div>
+
+                <div className="px-6 py-4 bg-slate-50 dark:bg-slate-900/60 flex flex-wrap gap-2 justify-end">
+                  <button onClick={onReset} className="px-4 py-2.5 rounded-xl text-xs font-black text-slate-500 dark:text-slate-400 hover:text-rose-500 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">원본으로 되돌리기</button>
+                  <button onClick={download} className="px-4 py-2.5 rounded-xl text-xs font-black text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-300 flex items-center gap-1.5"><Icon name="download" size={14} /> skills.js 내려받기</button>
+                  <button onClick={apply} className="px-5 py-2.5 rounded-xl text-xs font-black text-white bg-indigo-600 hover:bg-indigo-700 shadow-md flex items-center gap-1.5"><Icon name="check" size={14} /> 적용</button>
+                </div>
+              </div>
+            </div>
+          );
+        };
+
+        // --------------------------------------------------------------- App
+        const App = () => {
+          const [tab, setTab] = useState(TABS[0].id);
+          const [cardType, setCardType] = useState('시그니처');
+          const [activeSlot, setActiveSlot] = useState(null);
+          const [slots, setSlots] = useState([{ skillName: '', level: LEVELS[0] }, { skillName: '', level: LEVELS[0] }, { skillName: '', level: LEVELS[0] }]);
+          const [toast, setToast] = useState(null);
+          const [editorOpen, setEditorOpen] = useState(false);
+          const [override, setOverride] = useState(null);
+          const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains('dark'));
+
+          // 브라우저에 저장된 점수표 수정본 불러오기
+          useEffect(() => {
+            try { const saved = localStorage.getItem(STORAGE_KEY); if (saved) setOverride(JSON.parse(saved)); } catch (_) {}
+          }, []);
+
+          const toggleTheme = () => {
+            const next = !isDark;
+            setIsDark(next);
+            document.documentElement.classList.toggle('dark', next);
+            try { localStorage.setItem(THEME_KEY, next ? 'dark' : 'light'); } catch (_) {}
+          };
+
+          // 소스별 점수표 (편집본 우선)
+          const sourceData = useMemo(() => {
+            const merged = {};
+            SOURCES.forEach(s => { merged[s.id] = (override && override[s.id] && override[s.id].length) ? override[s.id] : (FILE_SKILLS[s.id] || []); });
+            return merged;
+          }, [override]);
+
+          // 탭별 노출 목록 (포지션 필터 적용)
+          const skillDataAll = useMemo(() => {
+            const byTab = {};
+            TABS.forEach(t => {
+              const list = sourceData[t.source || t.id] || [];
+              byTab[t.id] = list.filter(s => allowedInTab(s.name, t.id));
+            });
+            return byTab;
+          }, [sourceData]);
+
+          const skillData  = skillDataAll[tab] || [];
+          const currentSrc = sourceOf(tab);
+          const probKey    = PROB_TAB_MAP[tab] || tab;
+          const cardOptions = useMemo(() => Object.keys(PROB_DATA[probKey] || {}), [probKey]);
+          const isImpact = cardType.includes('임팩트');
+
+          useEffect(() => { if (!cardOptions.includes(cardType)) setCardType(cardOptions[0] || ''); }, [tab, cardOptions]);
+
+          const showToast = useCallback((msg) => { setToast(msg); setTimeout(() => setToast(null), 2200); }, []);
+
+          const findSkill = useCallback((name) => skillData.find(s => normalize(s.name) === normalize(name)) || null, [skillData]);
+
+          const resetSlots = () => {
+            setSlots([{ skillName: '', level: LEVELS[0] }, { skillName: '', level: LEVELS[0] }, { skillName: '', level: LEVELS[0] }]);
+            showToast("초기화되었습니다.");
+          };
+
+          // 스킬 선택 시, 해당 레벨이 없으면 사용 가능한 최고 레벨로 자동 조정
+          const handleSkillChange = (i, name) => {
+            const next = slots.map((s, idx) => idx === i ? { ...s, skillName: name } : s);
+            const skill = skillData.find(s => s.name === name);
+            if (skill && !hasLevel(skill, next[i].level)) {
+              const avail = LEVELS.filter(lv => hasLevel(skill, lv));
+              next[i].level = avail.length ? avail[avail.length - 1] : LEVELS[0];
+            }
+            setSlots(next);
+          };
+
+          const totals = useMemo(() => {
+            let scoreSum = 0, levelSum = 0;
+            slots.forEach(slot => {
+              const skill = findSkill(slot.skillName);
+              if (skill) { scoreSum += scoreOf(skill, slot.level); levelSum += slot.level; }
+            });
+            return { score: scoreSum.toFixed(2), level: levelSum };
+          }, [slots, findSkill]);
+
+          // 확률 계산용 점수 (임팩트는 2·3번 슬롯만 / 중계·마무리는 불펜 보정)
+          const calculationScore = useMemo(() => {
+            let sum = 0;
+            slots.forEach((slot, idx) => {
+              if (isImpact && idx === 0) return;
+              const skill = findSkill(slot.skillName);
+              if (skill) sum += scoreOf(skill, slot.level);
+            });
+            if (!isImpact && (BULLPEN.tabs || []).includes(tab)) sum = Math.max(0, sum - (BULLPEN.value || 0));
+            return sum;
+          }, [slots, findSkill, isImpact, tab]);
+
+          const luckInfo = useMemo(() => {
+            const score = calculationScore;
+            const table = PROB_DATA[probKey]?.[cardType];
+            if (!table || score < 1) return { prob: null, msg: '스킬을 선택해 주세요', suffix: '', ticketSuffix: '' };
+            const keys = Object.keys(table).map(Number).sort((a, b) => a - b);
+            const maxKey = keys[keys.length - 1];
+            let prob, suffix = '', ticketSuffix = '';
+            if (score <= keys[0]) prob = table[keys[0]];
+            else if (score >= maxKey) { prob = table[maxKey]; suffix = ' 이하'; ticketSuffix = ' 이상'; }
+            else if (table[score] !== undefined) prob = table[score];
+            else {
+              const upper = keys.find(k => k > score);
+              const lower = [...keys].reverse().find(k => k < score);
+              const ratio = (score - lower) / (upper - lower);
+              prob = table[lower] + ratio * (table[upper] - table[lower]);
+            }
+            return { prob, msg: '', suffix, ticketSuffix };
+          }, [probKey, cardType, calculationScore]);
+
+          const gradeInfo = useMemo(() => {
+            if (luckInfo.prob === null) return { grade: "-", label: "분석 대기", note: "스킬을 선택하면 분석이 시작됩니다.", color: LABEL, bg: "bg-slate-50 dark:bg-slate-800/60", border: "border-slate-200 dark:border-slate-700", icon: <Icon name="refresh-ccw" size={20} /> };
+            let matched = GRADE_GUIDE[GRADE_GUIDE.length - 1];
+            for (const g of GRADE_GUIDE) {
+              const ok = isImpact ? calculationScore >= (g.minScore?.[tab] ?? 0) : luckInfo.prob <= g.maxProb;
+              if (ok) { matched = g; break; }
+            }
+            return { grade: matched.grade, label: matched.name, note: matched.note, ...(GRADE_STYLE[matched.grade] || GRADE_STYLE["C"]) };
+          }, [luckInfo.prob, isImpact, calculationScore, tab]);
+
+          const ticketInfo = useMemo(() => {
+            if (luckInfo.prob === null) return { count: 0, fullName: "변경권" };
+            return { count: estimateTicketCount(luckInfo.prob), fullName: isImpact ? "일반스킬변경권" : "고급스킬변경권" };
+          }, [luckInfo.prob, isImpact]);
+
+          const applyOverride = (targetSource, rows) => {
+            const next = { ...(override || {}) };
+            SOURCES.forEach(s => { if (!next[s.id]) next[s.id] = sourceData[s.id]; });
+            next[targetSource] = rows;
+            setOverride(next);
+            try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch (_) {}
+          };
+
+          const resetOverride = () => {
+            setOverride(null);
+            try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
+            setEditorOpen(false);
+            showToast("data/skills.js 원본으로 되돌렸습니다.");
+          };
+
+          return (
+            <div className={`min-h-screen bg-[#f8fafc] dark:bg-slate-950 flex flex-col items-center p-4 md:p-8 font-sans ${TITLE}`}>
+              <div className="w-full max-w-3xl">
+                {toast && (
+                  <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[999] bg-slate-800 dark:bg-indigo-600 text-white px-6 py-3 rounded-2xl shadow-2xl font-bold text-sm">{toast}</div>
+                )}
+
+                <header className="bg-slate-900 dark:bg-slate-900 dark:border dark:border-slate-800 text-white rounded-[2rem] p-8 shadow-2xl mb-6 relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-64 h-64 bg-blue-500 opacity-10 rounded-full -mr-20 -mt-20 blur-3xl"></div>
+                  <div className="relative z-10 flex flex-col md:flex-row justify-between items-center gap-6">
+                    <div>
+                      <h1 className="text-2xl font-black italic flex items-center gap-3 tracking-tight">
+                        <div className="bg-blue-600 p-2 rounded-xl shadow-lg"><Icon name="zap" fill="white" className="text-white" size={20} /></div>
+                        V26 스킬 계산기
+                      </h1>
+                      <p className="text-slate-400 text-[10px] mt-2 font-bold tracking-[0.2em] uppercase">All Card Types &amp; Perfect Database</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <nav className="flex bg-white/10 p-1 rounded-2xl backdrop-blur-md border border-white/10 overflow-x-auto no-scrollbar">
+                        {TABS.map(t => (
+                          <button key={t.id} onClick={() => { setTab(t.id); setActiveSlot(null); }}
+                            className={`px-3 py-2 rounded-xl text-[11px] font-black transition-all whitespace-nowrap ${tab === t.id ? 'bg-white text-slate-900 shadow-lg' : 'text-slate-400 hover:text-white'}`}>
+                            {t.label}({(skillDataAll[t.id] || []).length})
+                          </button>
+                        ))}
+                      </nav>
+                      <button onClick={toggleTheme} title={isDark ? '라이트 모드로' : '다크 모드로'}
+                        className="shrink-0 w-10 h-10 rounded-2xl bg-white/10 border border-white/10 backdrop-blur-md flex items-center justify-center text-amber-300 hover:bg-white/20 transition-colors">
+                        <Icon name={isDark ? 'sun' : 'moon'} size={16} />
+                      </button>
+                    </div>
+                  </div>
+                </header>
+
+                <main className="space-y-6">
+                  <section className="bg-blue-50/50 dark:bg-slate-900/60 p-5 rounded-3xl border border-blue-100 dark:border-slate-800 shadow-sm relative">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                        <Icon name="info" size={14} className="text-blue-400" />
+                        <h2 className={`text-[10px] font-black uppercase tracking-widest ${LABEL}`}>Select Card Type</h2>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={() => setEditorOpen(true)} className={`text-[10px] font-black hover:text-indigo-600 flex items-center gap-1 px-2 py-1 rounded-lg border transition-colors ${CARD} ${LABEL}`}>
+                          <Icon name="table" size={10} /> 점수표 편집
+                        </button>
+                        <button onClick={resetSlots} className={`text-[10px] font-black hover:text-rose-500 flex items-center gap-1 px-2 py-1 rounded-lg border transition-colors ${CARD} ${LABEL}`}>
+                          <Icon name="refresh-ccw" size={10} /> 초기화
+                        </button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                      {cardOptions.map(ct => (
+                        <button key={ct} onClick={() => setCardType(ct)} className={`py-2.5 px-2 rounded-xl text-[11px] font-black border transition-all ${cardType === ct ? 'bg-blue-600 border-blue-600 text-white shadow-md' : `${CARD} text-slate-400 dark:text-slate-400 hover:border-blue-200 hover:text-blue-500`}`}>{ct}</button>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="bg-slate-50/70 dark:bg-slate-900/50 rounded-3xl p-5 border border-slate-200 dark:border-slate-800 shadow-inner">
+                    <div className={`text-[10px] font-black uppercase tracking-widest mb-4 text-center ${LABEL}`}>랭첼 기준 등급표</div>
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-center">
+                      {GRADE_GUIDE.map(item => (
+                        <div key={item.grade} className={`p-3 rounded-2xl border shadow-sm ${CARD}`}>
+                          <div className={`text-sm font-black italic ${GRADE_TEXT_COLOR[item.grade] || 'text-slate-500'}`}>{item.grade}</div>
+                          <div className="text-[10px] font-black text-slate-700 dark:text-slate-200 mt-1">{item.name}</div>
+                          <p className="text-[9px] leading-tight text-slate-400 dark:text-slate-500 mt-2">{item.note}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="space-y-1">
+                    <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 mb-3">
+                      <span className={`text-[10px] font-black uppercase tracking-widest ${LABEL}`}>스킬 등급</span>
+                      {Object.entries(GRADE_COLORS).map(([g, v]) => (
+                        <span key={g} className={`text-[10px] font-black ${v.text}`}>● {v.label}</span>
+                      ))}
+                    </div>
+                    {slots.map((slot, idx) => (
+                      <SkillSlot key={idx} index={idx} slot={slot} data={skillData} source={currentSrc}
+                        isOpen={activeSlot === idx}
+                        onToggle={() => setActiveSlot(activeSlot === idx ? null : idx)}
+                        onChange={handleSkillChange}
+                        onLevelChange={(i, lv) => setSlots(slots.map((s, k) => k === i ? { ...s, level: lv } : s))} />
+                    ))}
+                  </section>
+
+                  <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="bg-slate-900 dark:bg-slate-800 dark:border dark:border-slate-700 p-6 rounded-[2rem] flex flex-col items-center justify-center text-white shadow-xl">
+                      <Icon name="award" className="text-amber-400 mb-2" />
+                      <span className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-1">총 렙합 (1,2,3번)</span>
+                      <span className="text-3xl font-black italic">{totals.level}</span>
+                    </div>
+                    <div className="bg-white dark:bg-slate-800 p-6 rounded-[2rem] flex flex-col items-center justify-center border-2 border-blue-500 shadow-lg">
+                      <Icon name="trending-up" className="text-blue-500 mb-2" />
+                      <span className={`text-[10px] font-black uppercase tracking-widest mb-1 ${LABEL}`}>총 점수합 (1,2,3번)</span>
+                      <span className="text-3xl font-black text-blue-600 dark:text-blue-400 font-mono tracking-tighter">{totals.score}</span>
+                    </div>
+                    <div className={`p-6 rounded-[2rem] flex flex-col items-center justify-center border shadow-sm ${CARD}`}>
+                      <Icon name="percent" className="text-purple-500 mb-2" />
+                      <span className={`text-[10px] font-black uppercase tracking-widest mb-1 ${LABEL}`}>상위 확률 {isImpact && "(2,3번)"}</span>
+                      <span className={`font-black tracking-tighter ${luckInfo.prob !== null ? 'text-3xl text-purple-600 dark:text-purple-400 italic' : `text-xs mt-2 text-center ${LABEL}`}`}>
+                        {luckInfo.prob !== null ? `${luckInfo.prob.toFixed(4)}%${luckInfo.suffix}` : luckInfo.msg}
+                      </span>
+                    </div>
+                  </section>
+
+                  <section className={`p-8 rounded-[2.5rem] border-2 flex flex-col items-center justify-center transition-all duration-500 ${gradeInfo.bg} ${gradeInfo.border} border-dashed relative overflow-hidden`}>
+                    <div className={`flex items-center gap-2 mb-3 font-black uppercase text-[10px] tracking-[0.3em] ${gradeInfo.color}`}>{gradeInfo.icon}스킬셋 최종 평가 {isImpact && "(2,3번 기준)"}</div>
+                    <div className={`text-4xl font-black italic tracking-tighter mb-1 ${gradeInfo.color}`}>{gradeInfo.grade !== "-" && `${gradeInfo.grade} · `}{gradeInfo.label}</div>
+
+                    {isImpact && IMPACT_GUIDE[tab] && (
+                      <div className="mt-2 mb-4 p-3 bg-white/60 dark:bg-slate-800/70 rounded-2xl border border-blue-200 dark:border-slate-700 flex flex-col items-center shadow-sm fade-in">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <Icon name="star" size={14} className="text-blue-500" fill="#3b82f6" />
+                          <span className="text-[11px] font-black text-blue-600 dark:text-blue-400 uppercase tracking-wider">임팩트 1옵션 권장 기준</span>
+                        </div>
+                        <p className="text-[13px] font-black text-slate-700 dark:text-slate-200">{IMPACT_GUIDE[tab]}</p>
+                      </div>
+                    )}
+
+                    <p className={`text-xs font-bold text-center leading-relaxed max-w-sm ${LABEL}`}>{gradeInfo.note}</p>
+                    {luckInfo.prob !== null && (
+                      <div className="mt-5 bg-slate-900 dark:bg-slate-800 dark:border dark:border-slate-700 text-white px-6 py-4 rounded-2xl shadow-xl flex flex-col sm:flex-row items-center gap-2 sm:gap-4">
+                        <Icon name="ticket" size={22} className="text-amber-400" />
+                        <span className="text-xs font-black">
+                          {ticketInfo.fullName} 기대 소모량:
+                          <span className="text-amber-400 text-xl italic font-mono ml-2">약 {ticketInfo.count}개{luckInfo.ticketSuffix}</span>
+                        </span>
+                      </div>
+                    )}
+                  </section>
+                </main>
+
+                <footer className="mt-12 mb-8 text-center space-y-2">
+                  <p className="text-[10px] font-bold text-slate-300 dark:text-slate-700 uppercase tracking-[0.4em]">V26 Skill Analyzer</p>
+                  <p className="text-xs text-slate-300 dark:text-slate-600 font-medium italic opacity-60">스킬 점수는 data/skills.js, 포지션 규칙은 data/positions.js 에서 수정할 수 있습니다</p>
+                </footer>
+              </div>
+
+              {editorOpen && (
+                <ScoreEditor source={currentSrc} data={sourceData}
+                  onApply={applyOverride} onReset={resetOverride} isOverridden={!!override}
+                  onClose={() => setEditorOpen(false)} showToast={showToast} />
+              )}
+            </div>
+          );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
