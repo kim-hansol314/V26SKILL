@@ -14,7 +14,7 @@ window.DEFAULT_SKILL_GRADE = "특수";
 
 /* 등급별 스킬명 글씨색 (라이트 / 다크) — jpg 의 색 계열을 따랐습니다 */
 window.GRADE_COLORS = {
-  "특수":     { text: "text-amber-600 dark:text-amber-400",     label: "시그니처" },
+  "특수":     { text: "text-amber-600 dark:text-amber-400",     label: "국가대표" },
   "메이저":   { text: "text-fuchsia-600 dark:text-fuchsia-400", label: "메이저"   },
   "마이너":   { text: "text-sky-600 dark:text-sky-400",         label: "마이너"   },
   "루키":     { text: "text-emerald-600 dark:text-emerald-400", label: "루키"     },
