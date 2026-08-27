@@ -109,6 +109,9 @@ window.SKILL_SCORES = {
     { name: "리그의강자", scores: { 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0 } },
     { name: "빠른발", scores: { 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0 } },
     { name: "번트전문", scores: { 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0 } },
+    { name: "국대테이블세터", scores: { 5: 14.97, 6: 22.90, 7: null, 8: null, 9: null, 10: null } },
+    { name: "빈틈없는타선(배치O)", scores: { 5: 17.93, 6: 23.83, 7: null, 8: null, 9: null, 10: null } },
+    { name: "빈틈없는타선(배치X)", scores: { 5: 13.13, 6: 19.03, 7: null, 8: null, 9: null, 10: null } },
   ],
 
   pitcher: [
@@ -215,5 +218,7 @@ window.SKILL_SCORES = {
     { name: "리그의강자", scores: { 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0 } },
     { name: "이닝이터", scores: { 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0 } },
     { name: "사고방지", scores: { 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0 } },
+    { name: "위기탈출", scores: { 5: 19.90, 6: 24.50, 7: null, 8: null, 9: null, 10: null } },
+    { name: "타순공략", scores: { 5: 19.83, 6: 24.50, 7: null, 8: null, 9: null, 10: null } },
   ],
 };
