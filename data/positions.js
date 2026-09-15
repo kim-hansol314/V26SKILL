@@ -96,6 +96,7 @@ window.POSITION_AVAILABILITY = {
   "구속제어":            ["starter", "relief", "closer"],             
   "좌승사자":            ["starter"],                                 // ★ 제한
   "비FA계약":           ["starter", "relief", "closer"],
+  "소방수":           ["closer"],
 };
 
 /* -------------------------------------------------------------------------

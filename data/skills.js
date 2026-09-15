@@ -220,5 +220,6 @@ window.SKILL_SCORES = {
     { name: "사고방지", scores: { 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0 } },
     { name: "위기탈출", scores: { 5: 19.90, 6: 24.50, 7: null, 8: null, 9: null, 10: null } },
     { name: "타순공략", scores: { 5: 19.83, 6: 24.50, 7: null, 8: null, 9: null, 10: null } },
+    { name: "소방수", scores: { 5: null, 6: 25.305, 7: null, 8: null, 9: null, 10: null } },
   ],
 };
