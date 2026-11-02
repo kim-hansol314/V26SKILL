@@ -106,4 +106,13 @@ window.POSITION_AVAILABILITY = {
  *    예) window.POSITION_OVERRIDE = { "라이징스타(배치X)": ["starter"] };
  * ---------------------------------------------------------------------- */
 window.POSITION_OVERRIDE = {
+  /* 공식 확률표(변경권)상으로는 해당 포지션에 안 나오지만,
+   * 점수표가 그 포지션 값을 명시하고 있어 노출시키는 항목들.
+   * (계승 등으로 보유 가능한 조합) */
+  "마당쇠(선발)":          ["starter"],
+  "원포인트릴리프(선발)":   ["starter"],
+  "첫단추(불펜)":          ["relief", "closer"],
+  "집념(불펜)":            ["relief", "closer"],
+  "좌승사자(좌투,불펜)":    ["relief", "closer"],
+  "좌승사자(우투)":        ["starter", "relief", "closer"],
 };
